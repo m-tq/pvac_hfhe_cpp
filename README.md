@@ -95,7 +95,7 @@ g++ -std=c++17 -O2 -march=native -I./include example.cpp -o example
 | 10 | 2047 | 1.2 s | 388 s | ok |
 
 #### ct size
-| State | Edges | Layers | Memory |
+| state | edges | layers | memory |
 |-------|-------|--------|--------|
 | fresh | 20 | 1 | 21 KB |
 | after mul | 290 | 3 | 313 KB |
