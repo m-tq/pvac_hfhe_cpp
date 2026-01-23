@@ -147,6 +147,12 @@ inline int pick_distinct_idx2(int B, int ex1, int ex2) {
     return x;
 }
 
+inline Fp powg_inv(const PubKey& pk, int idx) {
+    const int B = pk.prm.B;
+    const int e = (B - (idx % B)) % B;
+    return pk.powg_B[static_cast<size_t>(e)];
+}
+
 inline Edge make_edge(uint32_t lid, uint16_t idx, uint8_t ch, Fp w,
                       const PubKey& pk, const RSeed& seed) {
     return {lid, idx, ch, w, sigma_from_H(pk, seed.ztag, seed.nonce, idx, ch, csprng_u64())};
@@ -188,8 +194,8 @@ inline Cipher enc_fp_depth(const PubKey& pk, const SecKey& sk, const Fp& v, int 
         sumg = sgn_val(ch[j]) > 0 ? fp_add(sumg, term) : fp_sub(sumg, term);
     }
 
-    Fp g_last = pk.powg_B[idx[S-1]];
-    Fp r_last = fp_mul(fp_sub(v, sumg), fp_inv(g_last));
+    Fp g_last_inv = powg_inv(pk, idx[S - 1]);
+    Fp r_last = fp_mul(fp_sub(v, sumg), g_last_inv);
     r[S-1] = sgn_val(ch[S-1]) < 0 ? fp_neg(r_last) : r_last;
 
     Fp R = prf_R(pk, sk, L.seed);
@@ -219,9 +225,10 @@ inline Cipher enc_fp_depth(const PubKey& pk, const SecKey& sk, const Fp& v, int 
         Fp Delta = next_delta(total_groups - group_id, 0);
         Fp Delta_prime = sign1 > 0 ? Delta : fp_neg(Delta);
 
-        Fp gi = pk.powg_B[i], gj = pk.powg_B[j];
+        Fp gi = pk.powg_B[i];
+        Fp gj_inv = powg_inv(pk, j);
         Fp r_i = rand_fp_nonzero();
-        Fp r_j = fp_mul(fp_sub(fp_mul(r_i, gi), Delta_prime), fp_inv(gj));
+        Fp r_j = fp_mul(fp_sub(fp_mul(r_i, gi), Delta_prime), gj_inv);
 
         C.E.push_back(make_edge(0, i, s1, fp_mul(r_i, R), pk, L.seed));
         C.E.push_back(make_edge(0, j, s2, fp_mul(r_j, R), pk, L.seed));
@@ -243,8 +250,8 @@ inline Cipher enc_fp_depth(const PubKey& pk, const SecKey& sk, const Fp& v, int 
         if (sign1 < 0) term1 = fp_neg(term1);
         if (sign2 < 0) term2 = fp_neg(term2);
 
-        Fp gk_signed = sign3 > 0 ? pk.powg_B[k] : fp_neg(pk.powg_B[k]);
-        Fp c = fp_mul(fp_sub(Delta, fp_add(term1, term2)), fp_inv(gk_signed));
+        Fp gk_signed_inv = sign3 > 0 ? powg_inv(pk, k) : fp_neg(powg_inv(pk, k));
+        Fp c = fp_mul(fp_sub(Delta, fp_add(term1, term2)), gk_signed_inv);
 
         C.E.push_back(make_edge(0, i, s1, fp_mul(a, R), pk, L.seed));
         C.E.push_back(make_edge(0, j, s2, fp_mul(b, R), pk, L.seed));

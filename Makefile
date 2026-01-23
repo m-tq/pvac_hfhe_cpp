@@ -71,6 +71,9 @@ $(BUILD)/test_aes_ctr: $(TESTS)/test_aes_ctr.cpp | $(BUILD)
 $(BUILD)/test_struct: $(TESTS)/test_struct.cpp | $(BUILD)
 	$(CXX) $(CXXFLAGS) -o $@ $<
 
+$(BUILD)/test_compactness: $(TESTS)/test_compactness.cpp | $(BUILD)
+	$(CXX) $(CXXFLAGS) -o $@ $<
+
 debug: $(BUILD)/test_main_debug
 sanitize: $(BUILD)/test_main_san
 examples: $(BUILD)/basic_usage
@@ -85,6 +88,7 @@ test_ct_fuzz: $(BUILD)/test_ct_fuzz
 test_ct_safe: $(BUILD)/test_ct_safe
 test_aes_ctr: $(BUILD)/test_aes_ctr
 test_struct: $(BUILD)/test_struct
+test_compactness: $(BUILD)/test_compactness
 
 
 test: $(BUILD)/test_main
@@ -143,6 +147,10 @@ test-aes-ctr: $(BUILD)/test_aes_ctr
 
 test-struct: $(BUILD)/test_struct
 	@./$(BUILD)/test_struct
+
+test-compactness: $(BUILD)/test_compactness
+	@./$(BUILD)/test_compactness
+
 
 clean:
 	rm -rf $(BUILD) pvac_metrics.csv
