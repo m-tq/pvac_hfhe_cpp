@@ -3,8 +3,12 @@
 #include <cstdint>
 #include <cmath>
 #include <vector>
-#include <unordered_set>
-#include <utility>
+#include <array>
+#include <tuple>
+#include <numeric>
+#include <algorithm>
+#include <functional>
+#include <type_traits>
 
 #include "../core/types.hpp"
 #include "../crypto/lpn.hpp"
@@ -13,295 +17,627 @@
 
 namespace pvac {
 
-inline std::pair<int,int> plan_noise(const PubKey& pk, int depth_hint) {
-    double budget = pk.prm.noise_entropy_bits +
-                    pk.prm.depth_slope_bits * std::max(0, depth_hint);
-    double per2 = 2.0 * std::log2((double)pk.prm.B);
-    double per3 = 3.0 * std::log2((double)pk.prm.B);
 
-    int z2 = std::max(0, (int)std::floor((budget * pk.prm.tuple2_fraction) / std::max(1e-6, per2)));
-    int z3 = std::max(0, (int)std::floor((budget * (1.0 - pk.prm.tuple2_fraction)) / std::max(1e-6, per3)));
+namespace alg {
 
-    if (z2 + z3 == 1) { z3 > 0 ? ++z3 : ++z2; }
-    return {z2, z3};
+template<typename T>
+struct Carrier {
+    std::vector<T> data;
+    
+    Carrier() = default;
+    explicit Carrier(std::vector<T> v) : data(std::move(v)) {}
+    Carrier(std::initializer_list<T> init) : data(init) {}
+    
+    Carrier(Carrier&&) = default;
+    Carrier(const Carrier&) = default;
+    Carrier& operator=(Carrier&&) = default;
+    Carrier& operator=(const Carrier&) = default;
+    
+    template<typename F>
+    auto fmap(F&& f) const -> Carrier<std::invoke_result_t<F, const T&>> {
+        using R = std::invoke_result_t<F, const T&>;
+        std::vector<R> img;
+        img.reserve(data.size());
+        for (const auto& x : data) {
+            img.push_back(f(x));
+        }
+        return Carrier<R>{ std::move(img) };
+    }
+    
+    template<typename F, typename A>
+    A fold(A init, F&& f) const {
+        for (const auto& x : data) {
+            init = f(std::move(init), x);
+        }
+        return init;
+    }
+    
+    template<typename P>
+    Carrier<T> where(P&& p) const {
+        std::vector<T> out;
+        for (const auto& x : data) {
+            if (p(x)) out.push_back(x);
+        }
+        return Carrier<T>{ std::move(out) };
+    }
+    
+    Carrier<T>& operator+=(const Carrier<T>& rhs) {
+        data.reserve(data.size() + rhs.data.size());
+        data.insert(data.end(), rhs.data.begin(), rhs.data.end());
+        return *this;
+    }
+    
+    Carrier<T>& operator+=(Carrier<T>&& rhs) {
+        data.reserve(data.size() + rhs.data.size());
+        for (auto& x : rhs.data) {
+            data.push_back(std::move(x));
+        }
+        return *this;
+    }
+    
+    friend Carrier<T> operator+(Carrier<T> lhs, const Carrier<T>& rhs) {
+        lhs += rhs;
+        return lhs;
+    }
+    
+    friend Carrier<T> operator+(Carrier<T> lhs, Carrier<T>&& rhs) {
+        lhs += std::move(rhs);
+        return lhs;
+    }
+    
+    size_t len() const { return data.size(); }
+    bool nil() const { return data.empty(); }
+    
+    T& operator[](size_t i) { return data[i]; }
+    const T& operator[](size_t i) const { return data[i]; }
+    
+    T& back() { return data.back(); }
+    const T& back() const { return data.back(); }
+    
+    auto begin() { return data.begin(); }
+    auto end() { return data.end(); }
+    auto begin() const { return data.begin(); }
+    auto end() const { return data.end(); }
+    
+    std::vector<T> unwrap() && { return std::move(data); }
+    std::vector<T> unwrap() const& { return data; }
+};
+
+template<typename G>
+inline auto gen(size_t n, G&& g) -> Carrier<std::invoke_result_t<G, size_t>> {
+    using T = std::invoke_result_t<G, size_t>;
+    std::vector<T> out;
+    out.reserve(n);
+    for (size_t i = 0; i < n; ++i) {
+        out.push_back(g(i));
+    }
+    return Carrier<T>{ std::move(out) };
+}
+
+}
+
+
+namespace field {
+
+struct Op {
+    static Fp zero() { return fp_from_u64(0); }
+    static Fp one() { return fp_from_u64(1); }
+    
+    static Fp add(Fp a, Fp b) { return fp_add(a, b); }
+    static Fp sub(Fp a, Fp b) { return fp_sub(a, b); }
+    static Fp mul(Fp a, Fp b) { return fp_mul(a, b); }
+    static Fp inv(Fp a) { return fp_inv(a); }
+    static Fp neg(Fp a) { return fp_neg(a); }
+    
+    static Fp sgn(Fp x, uint8_t s) {
+        return sgn_val(s) > 0 ? x : neg(x);
+    }
+    
+    static Fp sum(const alg::Carrier<Fp>& xs) {
+        return xs.fold(zero(), [](Fp a, const Fp& b) { return add(a, b); });
+    }
+    
+    static Fp rnd() { return rand_fp_nonzero(); }
+};
+
+}
+
+
+namespace entropy {
+
+struct Budget {
+    int n2;
+    int n3;
+    
+    int vol() const { return n2 + n3; }
+    
+    static Budget compute(const Params& p, int d) {
+        double cap = p.noise_entropy_bits + p.depth_slope_bits * std::max(0, d);
+        double c2 = 2.0 * std::log2(static_cast<double>(p.B));
+        double c3 = 3.0 * std::log2(static_cast<double>(p.B));
+        
+        int q2 = std::max(0, static_cast<int>(std::floor(cap * p.tuple2_fraction / std::max(1e-6, c2))));
+        int q3 = std::max(0, static_cast<int>(std::floor(cap * (1.0 - p.tuple2_fraction) / std::max(1e-6, c3))));
+        
+        if (q2 + q3 == 1) {
+            q3 > 0 ? ++q3 : ++q2;
+        }
+        
+        return { q2, q3 };
+    }
+};
+
+}
+
+
+namespace idx {
+
+class Selector {
+    int B_;
+    mutable std::vector<uint8_t> taken_;
+    
+public:
+    explicit Selector(int B) : B_(B), taken_(B, 0) {}
+    
+    int fresh() const {
+        int x;
+        do {
+            x = static_cast<int>(csprng_u64() % static_cast<uint64_t>(B_));
+        } while (taken_[x]);
+        taken_[x] = 1;
+        return x;
+    }
+    
+    int avoid(int a) const {
+        int x;
+        do {
+            x = static_cast<int>(csprng_u64() % static_cast<uint64_t>(B_));
+        } while (x == a);
+        return x;
+    }
+    
+    int avoid(int a, int b) const {
+        int x;
+        do {
+            x = static_cast<int>(csprng_u64() % static_cast<uint64_t>(B_));
+        } while (x == a || x == b);
+        return x;
+    }
+    
+    static uint8_t bit() {
+        return static_cast<uint8_t>(csprng_u64() & 1);
+    }
+};
+
+}
+
+
+namespace delta {
+
+struct Gen {
+    const PubKey& pk;
+    const SecKey& sk;
+    const RSeed& seed;
+    
+    Fp operator()(uint32_t i, uint8_t d) const {
+        RSeed s = seed;
+        uint64_t ii = static_cast<uint64_t>(i) + 1;
+        uint64_t dd = static_cast<uint64_t>(d) + 1;
+        
+        s.nonce.lo ^= 0x9e3779b97f4a7c15ull * ii;
+        s.nonce.hi ^= 0x94d049bb133111ebull * ii;
+        s.ztag ^= 0x517cc1b727220a95ull * ii;
+        
+        s.nonce.lo ^= dd;
+        s.nonce.hi ^= dd << 32;
+        s.ztag ^= dd << 48;
+        
+        return prf_R_noise(pk, sk, s);
+    }
+};
+
+struct Set {
+    alg::Carrier<Fp> vals;
+    Fp agg;
+    
+    static Set make(const Gen& g, const entropy::Budget& b) {
+        alg::Carrier<Fp> v = alg::gen(static_cast<size_t>(b.vol()), [&](size_t i) {
+            uint8_t dom = (i < static_cast<size_t>(b.n2)) ? 0 : 1;
+            return g(static_cast<uint32_t>(i), dom);
+        });
+        Fp s = field::Op::sum(v);
+        return { std::move(v), s };
+    }
+    
+    Fp operator[](size_t i) const { return vals[i]; }
+};
+
+}
+
+
+namespace graph {
+
+struct Emitter {
+    const PubKey& pk;
+    const RSeed& seed;
+    
+    Edge operator()(uint16_t pos, uint8_t pol, Fp w) const {
+        return { 0, pos, pol, w, sigma_from_H(pk, seed.ztag, seed.nonce, pos, pol, csprng_u64()) };
+    }
+};
+
+struct SigNode {
+    int pos;
+    uint8_t pol;
+    Fp coef;
+};
+
+class SigEdge {
+    const PubKey& pk_;
+    const idx::Selector& sel_;
+    static constexpr int K = 8;
+    
+public:
+    SigEdge(const PubKey& pk, const idx::Selector& sel) : pk_(pk), sel_(sel) {}
+    
+    alg::Carrier<SigNode> build(Fp target) const {
+        alg::Carrier<SigNode> nodes = alg::gen(K, [&](size_t) -> SigNode {
+            return { sel_.fresh(), idx::Selector::bit(), field::Op::rnd() };
+        });
+        
+        Fp acc = field::Op::zero();
+        for (size_t i = 0; i + 1 < nodes.len(); ++i) {
+            const SigNode& n = nodes[i];
+            acc = field::Op::add(acc, field::Op::sgn(field::Op::mul(n.coef, pk_.powg_B[n.pos]), n.pol));
+        }
+        
+        SigNode& last = nodes.back();
+        Fp rem = field::Op::sub(target, acc);
+        Fp q = field::Op::mul(rem, field::Op::inv(pk_.powg_B[last.pos]));
+        last.coef = sgn_val(last.pol) < 0 ? field::Op::neg(q) : q;
+        
+        return nodes;
+    }
+};
+
+struct N2 {
+    int pa, pb;
+    uint8_t sa, sb;
+    Fp ra, rb;
+};
+
+class N2Edge {
+    const PubKey& pk_;
+    const idx::Selector& sel_;
+    
+public:
+    N2Edge(const PubKey& pk, const idx::Selector& sel) : pk_(pk), sel_(sel) {}
+    
+    N2 build(Fp dt) const {
+        int a = static_cast<int>(csprng_u64() % static_cast<uint64_t>(pk_.prm.B));
+        int b = sel_.avoid(a);
+        uint8_t sa = idx::Selector::bit();
+        uint8_t sb = sa ^ 1;
+        
+        Fp d = sgn_val(sa) > 0 ? dt : field::Op::neg(dt);
+        Fp ra = field::Op::rnd();
+        Fp rb = field::Op::mul(field::Op::sub(field::Op::mul(ra, pk_.powg_B[a]), d), field::Op::inv(pk_.powg_B[b]));
+        
+        return { a, b, sa, sb, ra, rb };
+    }
+};
+
+struct N3 {
+    int pa, pb, pc;
+    uint8_t sa, sb, sc;
+    Fp ra, rb, rc;
+};
+
+class N3Edge {
+    const PubKey& pk_;
+    const idx::Selector& sel_;
+    
+public:
+    N3Edge(const PubKey& pk, const idx::Selector& sel) : pk_(pk), sel_(sel) {}
+    
+    N3 build(Fp dt) const {
+        int a = static_cast<int>(csprng_u64() % static_cast<uint64_t>(pk_.prm.B));
+        int b = sel_.avoid(a);
+        int c = sel_.avoid(a, b);
+        
+        uint8_t sa = idx::Selector::bit();
+        uint8_t sb = idx::Selector::bit();
+        uint8_t sc = idx::Selector::bit();
+        
+        Fp ra = field::Op::rnd();
+        Fp rb = field::Op::rnd();
+        
+        Fp ta = field::Op::sgn(field::Op::mul(ra, pk_.powg_B[a]), sa);
+        Fp tb = field::Op::sgn(field::Op::mul(rb, pk_.powg_B[b]), sb);
+        Fp gc = field::Op::sgn(pk_.powg_B[c], sc);
+        Fp rc = field::Op::mul(field::Op::sub(dt, field::Op::add(ta, tb)), field::Op::inv(gc));
+        
+        return { a, b, c, sa, sb, sc, ra, rb, rc };
+    }
+};
+
+inline alg::Carrier<Edge> realize(const Emitter& em, Fp R, const N2& n) {
+    return alg::Carrier<Edge>{ {
+        em(static_cast<uint16_t>(n.pa), n.sa, field::Op::mul(n.ra, R)),
+        em(static_cast<uint16_t>(n.pb), n.sb, field::Op::mul(n.rb, R))
+    } };
+}
+
+inline alg::Carrier<Edge> realize(const Emitter& em, Fp R, const N3& n) {
+    return alg::Carrier<Edge>{ {
+        em(static_cast<uint16_t>(n.pa), n.sa, field::Op::mul(n.ra, R)),
+        em(static_cast<uint16_t>(n.pb), n.sb, field::Op::mul(n.rb, R)),
+        em(static_cast<uint16_t>(n.pc), n.sc, field::Op::mul(n.rc, R))
+    } };
+}
+
+}
+
+
+namespace reduction {
+
+inline alg::Carrier<Edge> merge(alg::Carrier<Edge> edges, const PubKey& pk) {
+    if (edges.nil()) return {};
+    
+    const int B = pk.prm.B;
+    
+    uint32_t maxL = 0;
+    for (const auto& e : edges) {
+        if (e.layer_id > maxL) maxL = e.layer_id;
+    }
+    const size_t L = static_cast<size_t>(maxL) + 1;
+    
+    struct Slot {
+        bool active = false;
+        Fp w;
+        BitVec s;
+    };
+    
+    std::vector<Slot> acc_p(L * B);
+    std::vector<Slot> acc_m(L * B);
+    
+    for (auto& e : edges) {
+        size_t idx = static_cast<size_t>(e.layer_id) * B + e.idx;
+        auto& acc = (e.ch == SGN_P) ? acc_p : acc_m;
+        
+        if (!acc[idx].active) {
+            acc[idx].active = true;
+            acc[idx].w = e.w;
+            acc[idx].s = std::move(e.s);
+        } else {
+            acc[idx].w = fp_add(acc[idx].w, e.w);
+            acc[idx].s.xor_with(e.s);
+        }
+    }
+    
+    auto nz = [](const Fp& w, const BitVec& s) {
+        return ct::fp_is_nonzero(w) || s.popcnt() != 0;
+    };
+    
+    std::vector<Edge> out;
+    out.reserve(edges.len());
+    
+    for (size_t lid = 0; lid < L; ++lid) {
+        for (int k = 0; k < B; ++k) {
+            size_t idx = lid * B + k;
+            
+            if (acc_p[idx].active && nz(acc_p[idx].w, acc_p[idx].s)) {
+                out.push_back({
+                    static_cast<uint32_t>(lid),
+                    static_cast<uint16_t>(k),
+                    SGN_P,
+                    acc_p[idx].w,
+                    std::move(acc_p[idx].s)
+                });
+            }
+            if (acc_m[idx].active && nz(acc_m[idx].w, acc_m[idx].s)) {
+                out.push_back({
+                    static_cast<uint32_t>(lid),
+                    static_cast<uint16_t>(k),
+                    SGN_M,
+                    acc_m[idx].w,
+                    std::move(acc_m[idx].s)
+                });
+            }
+        }
+    }
+    
+    return alg::Carrier<Edge>{ std::move(out) };
+}
+
+inline alg::Carrier<Edge> permute(alg::Carrier<Edge> e) {
+    for (size_t i = e.len(); i > 1; --i) {
+        std::swap(e.data[i - 1], e.data[csprng_u64() % i]);
+    }
+    return e;
+}
+
+}
+
+
+namespace core {
+
+inline Cipher synth(const PubKey& pk, const SecKey& sk, Fp v, int depth) {
+    Layer L{};
+    L.rule = RRule::BASE;
+    L.seed.nonce = make_nonce128();
+    L.seed.ztag = prg_layer_ztag(pk.canon_tag, L.seed.nonce);
+    
+    entropy::Budget b = entropy::Budget::compute(pk.prm, depth);
+    delta::Gen dg{ pk, sk, L.seed };
+    delta::Set ds = delta::Set::make(dg, b);
+    
+    Fp R = prf_R(pk, sk, L.seed);
+    Fp va = field::Op::sub(v, ds.agg);
+    
+    idx::Selector sel(pk.prm.B);
+    graph::Emitter em{ pk, L.seed };
+    
+    graph::SigEdge sig(pk, sel);
+    alg::Carrier<graph::SigNode> sn = sig.build(va);
+    
+    alg::Carrier<Edge> se = sn.fmap([&](const graph::SigNode& n) {
+        return em(static_cast<uint16_t>(n.pos), n.pol, field::Op::mul(n.coef, R));
+    });
+    
+    graph::N2Edge n2e(pk, sel);
+    for (int t = 0; t < b.n2; ++t) {
+        se += graph::realize(em, R, n2e.build(ds[t]));
+    }
+    
+    graph::N3Edge n3e(pk, sel);
+    for (int t = 0; t < b.n3; ++t) {
+        se += graph::realize(em, R, n3e.build(ds[static_cast<size_t>(b.n2) + t]));
+    }
+    
+    alg::Carrier<Edge> all = reduction::permute(reduction::merge(std::move(se), pk));
+    
+    Cipher C;
+    C.L.push_back(L);
+    C.E = std::move(all).unwrap();
+    return C;
+}
+
+inline Cipher fuse(const PubKey& pk, const Cipher& a, const Cipher& b) {
+    uint32_t off = static_cast<uint32_t>(a.L.size());
+    
+    std::vector<Layer> ls;
+    ls.reserve(a.L.size() + b.L.size());
+    ls.insert(ls.end(), a.L.begin(), a.L.end());
+    
+    for (Layer l : b.L) {
+        if (l.rule == RRule::PROD) {
+            l.pa += off;
+            l.pb += off;
+        }
+        ls.push_back(l);
+    }
+    
+    std::vector<Edge> es;
+    es.reserve(a.E.size() + b.E.size());
+    es.insert(es.end(), a.E.begin(), a.E.end());
+    
+    for (Edge e : b.E) {
+        e.layer_id += off;
+        es.push_back(std::move(e));
+    }
+    
+    if (es.size() > pk.prm.edge_budget) {
+        es = reduction::merge(alg::Carrier<Edge>{ std::move(es) }, pk).unwrap();
+    }
+    
+    Cipher C;
+    C.L = std::move(ls);
+    C.E = std::move(es);
+    return C;
+}
+
+}
+
+
+inline std::pair<int, int> plan_noise(const PubKey& pk, int depth_hint) {
+    entropy::Budget b = entropy::Budget::compute(pk.prm, depth_hint);
+    return { b.n2, b.n3 };
 }
 
 inline double sigma_density(const PubKey& pk, const Cipher& C) {
     if (C.E.empty()) return 0.0;
-    long double ones = 0, total = 0;
+    long double o = 0, t = 0;
     for (const auto& e : C.E) {
-        ones += e.s.popcnt();
-        total += pk.prm.m_bits;
+        o += e.s.popcnt();
+        t += pk.prm.m_bits;
     }
-    return (double)(ones / total);
+    return static_cast<double>(o / t);
 }
 
 inline void compact_edges(const PubKey& pk, Cipher& C) {
-    int B = pk.prm.B;
-    size_t L = C.L.size();
-
-    struct Agg { bool have_p = false, have_m = false; Fp wp, wm; BitVec sp, sm; };
-    std::vector<Agg> acc(L * B);
-
-    for (const auto& e : C.E) {
-        Agg& a = acc[(size_t)e.layer_id * B + e.idx];
-        if (e.ch == SGN_P) {
-            if (!a.have_p) { a.wp = fp_from_u64(0); a.sp = BitVec::make(pk.prm.m_bits); a.have_p = true; }
-            a.wp = fp_add(a.wp, e.w);
-            a.sp.xor_with(e.s);
-        } else {
-            if (!a.have_m) { a.wm = fp_from_u64(0); a.sm = BitVec::make(pk.prm.m_bits); a.have_m = true; }
-            a.wm = fp_add(a.wm, e.w);
-            a.sm.xor_with(e.s);
-        }
-    }
-
-    auto nz = [](const Fp& w, const BitVec& s) { return ct::fp_is_nonzero(w) || s.popcnt() != 0; };
-
-    std::vector<Edge> out;
-    out.reserve(C.E.size());
-    for (size_t lid = 0; lid < L; lid++) {
-        for (int k = 0; k < B; k++) {
-            Agg& a = acc[lid * (size_t)B + k];
-            if (a.have_p && nz(a.wp, a.sp)) out.push_back({(uint32_t)lid, (uint16_t)k, SGN_P, a.wp, a.sp});
-            if (a.have_m && nz(a.wm, a.sm)) out.push_back({(uint32_t)lid, (uint16_t)k, SGN_M, a.wm, a.sm});
-        }
-    }
-    C.E.swap(out);
+    C.E = reduction::merge(alg::Carrier<Edge>{ std::move(C.E) }, pk).unwrap();
 }
 
 inline void compact_layers(Cipher& C) {
-    const size_t L = C.L.size();
+    size_t L = C.L.size();
     if (L == 0) return;
-
-    std::vector<uint8_t> used(L, 0);
-    for (const auto& e : C.E) if (e.layer_id < L) used[e.layer_id] = 1;
-
-    for (bool changed = true; changed; ) {
-        changed = false;
-        for (size_t lid = 0; lid < L; ++lid) {
-            if (!used[lid] || C.L[lid].rule != RRule::PROD) continue;
-            auto mark = [&](uint32_t p) { if (p < L && !used[p]) { used[p] = 1; changed = true; } };
-            mark(C.L[lid].pa);
-            mark(C.L[lid].pb);
+    
+    std::vector<uint8_t> live(L, 0);
+    for (const auto& e : C.E) {
+        if (e.layer_id < L) live[e.layer_id] = 1;
+    }
+    
+    for (bool chg = true; chg; ) {
+        chg = false;
+        for (size_t i = 0; i < L; ++i) {
+            if (!live[i] || C.L[i].rule != RRule::PROD) continue;
+            auto mark = [&](uint32_t p) {
+                if (p < L && !live[p]) { live[p] = 1; chg = true; }
+            };
+            mark(C.L[i].pa);
+            mark(C.L[i].pb);
         }
     }
-
+    
     std::vector<uint32_t> remap(L, UINT32_MAX);
-    std::vector<Layer> newL;
-    newL.reserve(L);
-
-    for (size_t lid = 0; lid < L; ++lid)
-        if (used[lid]) { remap[lid] = (uint32_t)newL.size(); newL.push_back(C.L[lid]); }
-
-    if (newL.size() == L) return;
-
-    for (auto& Lr : newL)
-        if (Lr.rule == RRule::PROD) { Lr.pa = remap[Lr.pa]; Lr.pb = remap[Lr.pb]; }
-    for (auto& e : C.E) e.layer_id = remap[e.layer_id];
-
-    C.L.swap(newL);
+    std::vector<Layer> nL;
+    nL.reserve(L);
+    
+    for (size_t i = 0; i < L; ++i) {
+        if (live[i]) {
+            remap[i] = static_cast<uint32_t>(nL.size());
+            nL.push_back(C.L[i]);
+        }
+    }
+    
+    if (nL.size() == L) return;
+    
+    for (auto& l : nL) {
+        if (l.rule == RRule::PROD) {
+            l.pa = remap[l.pa];
+            l.pb = remap[l.pb];
+        }
+    }
+    for (auto& e : C.E) {
+        e.layer_id = remap[e.layer_id];
+    }
+    
+    C.L.swap(nL);
 }
 
-inline void guard_budget(const PubKey& pk, Cipher& C, const char* where) {
+inline void guard_budget(const PubKey& pk, Cipher& C, const char* ctx) {
     if (C.E.size() > pk.prm.edge_budget) {
-        if (g_dbg) std::cout << "[guard] " << where << ": " << C.E.size() << " -> compact\n";
+        if (g_dbg) std::cout << "[guard] " << ctx << ": " << C.E.size() << " -> compact\n";
         compact_edges(pk, C);
     }
 }
 
-// ndt (new)
-inline Fp prf_noise_delta(const PubKey& pk, const SecKey& sk,
-                          const RSeed& base_seed, uint32_t group_id, uint8_t kind) {
-    RSeed s2 = base_seed;
-    uint64_t g = (uint64_t)group_id + 1;
-    uint64_t k = (uint64_t)kind + 1;
-
-    s2.nonce.lo ^= 0x9e3779b97f4a7c15ull * g;
-    s2.nonce.hi ^= 0x94d049bb133111ebull * g;
-    s2.ztag ^= 0x517cc1b727220a95ull * g;
-
-    s2.nonce.lo ^= k;
-    s2.nonce.hi ^= (k << 32);
-    s2.ztag ^= (k << 48);
-
-    return prf_R_noise(pk, sk, s2);
+inline Fp prf_noise_delta(const PubKey& pk, const SecKey& sk, const RSeed& seed, uint32_t gid, uint8_t kind) {
+    return delta::Gen{ pk, sk, seed }(gid, kind);
 }
 
-inline int pick_unique_idx(int B, std::unordered_set<int>& used) {
-    int x;
-    do { x = (int)(csprng_u64() % (uint64_t)B); } while (used.count(x));
-    used.insert(x);
-    return x;
-}
-
-inline int pick_distinct_idx(int B, int exclude) {
-    int x;
-    do { x = (int)(csprng_u64() % (uint64_t)B); } while (x == exclude);
-    return x;
-}
-
-inline int pick_distinct_idx2(int B, int ex1, int ex2) {
-    int x;
-    do { x = (int)(csprng_u64() % (uint64_t)B); } while (x == ex1 || x == ex2);
-    return x;
-}
-
-inline Fp powg_inv(const PubKey& pk, int idx) {
-    const int B = pk.prm.B;
-    const int e = (B - (idx % B)) % B;
-    return pk.powg_B[static_cast<size_t>(e)];
-}
-
-inline Edge make_edge(uint32_t lid, uint16_t idx, uint8_t ch, Fp w,
-                      const PubKey& pk, const RSeed& seed) {
-    return {lid, idx, ch, w, sigma_from_H(pk, seed.ztag, seed.nonce, idx, ch, csprng_u64())};
-}
-
-inline void shuffle_edges(std::vector<Edge>& E) {
-    size_t n = E.size();
-    if (n < 2) return;
-    for (size_t i = n - 1; i > 0; --i)
-        std::swap(E[i], E[csprng_u64() % (i + 1)]);
-}
-
-inline Cipher enc_fp_depth(const PubKey& pk, const SecKey& sk, const Fp& v, int depth_hint) {
-    Cipher C;
-
-    Layer L;
-    L.rule = RRule::BASE;
-    L.seed.nonce = make_nonce128();
-    L.seed.ztag = prg_layer_ztag(pk.canon_tag, L.seed.nonce);
-    C.L.push_back(L);
-
-    constexpr int S = 8;
-    std::unordered_set<int> used;
-    used.reserve(S * 2);
-
-    std::vector<int> idx(S);
-    std::vector<uint8_t> ch(S);
-    std::vector<Fp> r(S);
-
-    for (int j = 0; j < S; j++) {
-        idx[j] = pick_unique_idx(pk.prm.B, used);
-        ch[j] = csprng_u64() & 1;
-    }
-
-    Fp sumg = fp_from_u64(0);
-    for (int j = 0; j < S - 1; j++) {
-        r[j] = rand_fp_nonzero();
-        Fp term = fp_mul(r[j], pk.powg_B[idx[j]]);
-        sumg = sgn_val(ch[j]) > 0 ? fp_add(sumg, term) : fp_sub(sumg, term);
-    }
-
-    Fp g_last_inv = powg_inv(pk, idx[S - 1]);
-    Fp r_last = fp_mul(fp_sub(v, sumg), g_last_inv);
-    r[S-1] = sgn_val(ch[S-1]) < 0 ? fp_neg(r_last) : r_last;
-
-    Fp R = prf_R(pk, sk, L.seed);
-
-    for (int j = 0; j < S; j++)
-        C.E.push_back(make_edge(0, idx[j], ch[j], fp_mul(r[j], R), pk, L.seed));
-
-    auto [Z2, Z3] = plan_noise(pk, depth_hint);
-    int total_groups = Z2 + Z3;
-    Fp delta_acc = fp_from_u64(0);
-    int group_id = 0;
-
-    auto next_delta = [&](int groups_left, uint8_t kind) -> Fp {
-        if (groups_left <= 1) return fp_neg(delta_acc);
-        Fp d = prf_noise_delta(pk, sk, L.seed, group_id, kind);
-        delta_acc = fp_add(delta_acc, d);
-        return d;
-    };
-
-    for (int t = 0; t < Z2; ++t, ++group_id) {
-        int i = csprng_u64() % pk.prm.B;
-        int j = pick_distinct_idx(pk.prm.B, i);
-
-        uint8_t s1 = csprng_u64() & 1, s2 = s1 ^ 1;
-        int sign1 = sgn_val(s1);
-
-        Fp Delta = next_delta(total_groups - group_id, 0);
-        Fp Delta_prime = sign1 > 0 ? Delta : fp_neg(Delta);
-
-        Fp gi = pk.powg_B[i];
-        Fp gj_inv = powg_inv(pk, j);
-        Fp r_i = rand_fp_nonzero();
-        Fp r_j = fp_mul(fp_sub(fp_mul(r_i, gi), Delta_prime), gj_inv);
-
-        C.E.push_back(make_edge(0, i, s1, fp_mul(r_i, R), pk, L.seed));
-        C.E.push_back(make_edge(0, j, s2, fp_mul(r_j, R), pk, L.seed));
-    }
-
-    for (int t = 0; t < Z3; ++t, ++group_id) {
-        int i = csprng_u64() % pk.prm.B;
-        int j = pick_distinct_idx(pk.prm.B, i);
-        int k = pick_distinct_idx2(pk.prm.B, i, j);
-
-        uint8_t s1 = csprng_u64() & 1, s2 = csprng_u64() & 1, s3 = csprng_u64() & 1;
-        int sign1 = sgn_val(s1), sign2 = sgn_val(s2), sign3 = sgn_val(s3);
-
-        Fp Delta = next_delta(total_groups - group_id, 1);
-        Fp a = rand_fp_nonzero(), b = rand_fp_nonzero();
-
-        Fp term1 = fp_mul(a, pk.powg_B[i]);
-        Fp term2 = fp_mul(b, pk.powg_B[j]);
-        if (sign1 < 0) term1 = fp_neg(term1);
-        if (sign2 < 0) term2 = fp_neg(term2);
-
-        Fp gk_signed_inv = sign3 > 0 ? powg_inv(pk, k) : fp_neg(powg_inv(pk, k));
-        Fp c = fp_mul(fp_sub(Delta, fp_add(term1, term2)), gk_signed_inv);
-
-        C.E.push_back(make_edge(0, i, s1, fp_mul(a, R), pk, L.seed));
-        C.E.push_back(make_edge(0, j, s2, fp_mul(b, R), pk, L.seed));
-        C.E.push_back(make_edge(0, k, s3, fp_mul(c, R), pk, L.seed));
-    }
-
-    compact_edges(pk, C);
-    guard_budget(pk, C, "enc");
-    shuffle_edges(C.E);
-    return C;
+inline Cipher enc_fp_depth(const PubKey& pk, const SecKey& sk, const Fp& v, int d) {
+    return core::synth(pk, sk, v, d);
 }
 
 inline Cipher combine_ciphers(const PubKey& pk, const Cipher& a, const Cipher& b) {
-    Cipher C;
-    C.L.reserve(a.L.size() + b.L.size());
-    C.E.reserve(a.E.size() + b.E.size());
-
-    for (const auto& L : a.L) C.L.push_back(L);
-    uint32_t off = (uint32_t)a.L.size();
-
-    for (auto L : b.L) {
-        if (L.rule == RRule::PROD) { L.pa += off; L.pb += off; }
-        C.L.push_back(L);
-    }
-
-    for (const auto& e : a.E) C.E.push_back(e);
-    for (auto e : b.E) { e.layer_id += off; C.E.push_back(std::move(e)); }
-
-    guard_budget(pk, C, "combine");
-    compact_layers(C);
-    return C;
+    return core::fuse(pk, a, b);
 }
 
-inline Cipher enc_value_depth(const PubKey& pk, const SecKey& sk, uint64_t v, int depth_hint) {
-    Fp val = fp_from_u64(v);
-    Fp mask = rand_fp_nonzero();
-    return combine_ciphers(pk,
-        enc_fp_depth(pk, sk, fp_add(val, mask), depth_hint),
-        enc_fp_depth(pk, sk, fp_neg(mask), depth_hint));
+inline Cipher enc_value_depth(const PubKey& pk, const SecKey& sk, uint64_t v, int d) {
+    Fp p = fp_from_u64(v);
+    Fp m = field::Op::rnd();
+    return combine_ciphers(pk, enc_fp_depth(pk, sk, field::Op::add(p, m), d), enc_fp_depth(pk, sk, field::Op::neg(m), d));
 }
 
 inline Cipher enc_value(const PubKey& pk, const SecKey& sk, uint64_t v) {
     return enc_value_depth(pk, sk, v, 0);
 }
 
-inline Cipher enc_zero_depth(const PubKey& pk, const SecKey& sk, int depth_hint) {
-    Fp mask = rand_fp_nonzero();
-    return combine_ciphers(pk,
-        enc_fp_depth(pk, sk, mask, depth_hint),
-        enc_fp_depth(pk, sk, fp_neg(mask), depth_hint));
+inline Cipher enc_zero_depth(const PubKey& pk, const SecKey& sk, int d) {
+    Fp m = field::Op::rnd();
+    return combine_ciphers(pk, enc_fp_depth(pk, sk, m, d), enc_fp_depth(pk, sk, field::Op::neg(m), d));
 }
 
 }

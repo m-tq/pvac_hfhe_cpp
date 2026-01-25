@@ -71,6 +71,9 @@ $(BUILD)/test_aes_ctr: $(TESTS)/test_aes_ctr.cpp | $(BUILD)
 $(BUILD)/test_struct: $(TESTS)/test_struct.cpp | $(BUILD)
 	$(CXX) $(CXXFLAGS) -o $@ $<
 
+$(BUILD)/test_struct_v2: $(TESTS)/test_struct_v2.cpp | $(BUILD)
+	$(CXX) $(CXXFLAGS) -o $@ $<
+
 $(BUILD)/test_compactness: $(TESTS)/test_compactness.cpp | $(BUILD)
 	$(CXX) $(CXXFLAGS) -o $@ $<
 
@@ -88,6 +91,7 @@ test_ct_fuzz: $(BUILD)/test_ct_fuzz
 test_ct_safe: $(BUILD)/test_ct_safe
 test_aes_ctr: $(BUILD)/test_aes_ctr
 test_struct: $(BUILD)/test_struct
+test_struct_v2: $(BUILD)/test_struct_v2
 test_compactness: $(BUILD)/test_compactness
 
 
@@ -147,6 +151,9 @@ test-aes-ctr: $(BUILD)/test_aes_ctr
 
 test-struct: $(BUILD)/test_struct
 	@./$(BUILD)/test_struct
+
+test-struct-v2: $(BUILD)/test_struct_v2
+	@./$(BUILD)/test_struct_v2
 
 test-compactness: $(BUILD)/test_compactness
 	@./$(BUILD)/test_compactness
