@@ -77,6 +77,9 @@ $(BUILD)/test_struct_v2: $(TESTS)/test_struct_v2.cpp | $(BUILD)
 $(BUILD)/test_compactness: $(TESTS)/test_compactness.cpp | $(BUILD)
 	$(CXX) $(CXXFLAGS) -o $@ $<
 
+$(BUILD)/test_zero_sk: $(TESTS)/test_zero_sk.cpp | $(BUILD)
+	$(CXX) $(CXXFLAGS) -o $@ $<
+
 debug: $(BUILD)/test_main_debug
 sanitize: $(BUILD)/test_main_san
 examples: $(BUILD)/basic_usage
@@ -93,6 +96,7 @@ test_aes_ctr: $(BUILD)/test_aes_ctr
 test_struct: $(BUILD)/test_struct
 test_struct_v2: $(BUILD)/test_struct_v2
 test_compactness: $(BUILD)/test_compactness
+test_zero_sk: $(BUILD)/test_zero_sk
 
 
 test: $(BUILD)/test_main
@@ -157,6 +161,9 @@ test-struct-v2: $(BUILD)/test_struct_v2
 
 test-compactness: $(BUILD)/test_compactness
 	@./$(BUILD)/test_compactness
+
+test-zero-sk: $(BUILD)/test_zero_sk
+	@./$(BUILD)/test_zero_sk
 
 
 clean:
