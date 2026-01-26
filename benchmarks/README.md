@@ -144,9 +144,9 @@ f(x) = 3x^3 + 2x^2 + 5x + 7 (depth-3)
 | scheme | 64-bit mul | vs PVAC_HFHE |
 |--------|------------|---------|
 | PVAC | 2.47 ms | 1.0x |
-| FHEW | 32.48 min | 789,000x slower |
-| TFHE | 33.47 min | 813,000x slower |
-| binfhe_ap | 42.01 min | 1,020,000x slower |
+| FHEW | 32.48 min | 789000x slower |
+| TFHE | 33.47 min | 813000x slower |
+| binfhe_ap | 42.01 min | 1020000x slower |
 
 it may not be very indicative because it solves different problems but we decided to include it to display as honestly as possible the current situation for the Poc hfhe versus the product scheme with 10+ y of research
 
