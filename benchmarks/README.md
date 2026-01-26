@@ -29,6 +29,16 @@ for this work we use a DigitalOcean droplet with the following parameters:
 
 ---
 
+### 0. PVAC_HFHE (PoC) vs TFHE-rs (64 bit integers)
+
+| op | PVAC_HFHE (PoC) | TFHE-rs cpu | TFHE-rs gpu | vs cpu | vs gpu |
+|----|-----------|-------------|-------------|--------|--------|
+| add | 0.012 ms | 109 ms | 8.97 ms | 9083x | 747x |
+| sub | 0.012 ms | 109 ms | 8.97 ms | 9083x | 747x |
+| mul | 2.47 ms | 402 ms | 31.9 ms | 163x | 13x |
+
+source: tfhe-rs benchmarks
+
 ## 1. scalar mul (ct * ct)
 
 | scheme | mode | mul (ms) | vs pvac_hfhe |
