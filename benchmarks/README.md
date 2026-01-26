@@ -10,6 +10,12 @@ pvac_hfhe (even the earliest concept) outperforms prod implemented rlwe in scala
 
 for this work we use a DigitalOcean droplet with the following parameters:
 
+- cpu: DO Premium AMD 8 core 2.0GHz
+- ram: 32GB
+- os: Ubuntu 24.04 LTS
+- compiler: g++ -O3 -march=native
+- pvac_hfhe: research poc (unoptimized)
+
 ## schemes
 
 | scheme | type | impl | security |
