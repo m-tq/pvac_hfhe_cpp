@@ -116,6 +116,7 @@ struct Edge {
 struct Cipher {
     std::vector<Layer> L;
     std::vector<Edge> E;
+    Fp c0{0, 0};
 };
 
 struct PubKey {

@@ -26,6 +26,9 @@ $(BUILD)/test_main_san: $(TESTS)/test_main.cpp | $(BUILD)
 $(BUILD)/basic_usage: $(EXAMPLES)/basic_usage.cpp | $(BUILD)
 	$(CXX) $(CXXFLAGS) -o $@ $<
 
+$(BUILD)/ml_credit_scoring: $(EXAMPLES)/ml/credit_scoring.cpp | $(BUILD)
+	$(CXX) $(CXXFLAGS) -o $@ $<
+
 $(BUILD)/test_prf: $(TESTS)/test_prf.cpp | $(BUILD)
 	$(CXX) $(CXXFLAGS) -o $@ $<
 
@@ -82,7 +85,7 @@ $(BUILD)/test_zero_sk: $(TESTS)/test_zero_sk.cpp | $(BUILD)
 
 debug: $(BUILD)/test_main_debug
 sanitize: $(BUILD)/test_main_san
-examples: $(BUILD)/basic_usage
+examples: $(BUILD)/basic_usage $(BUILD)/ml_credit_scoring
 test_zero: $(BUILD)/test_zero
 test_lpn: $(BUILD)/test_lpn
 test_fp_core: $(BUILD)/test_fp_core
@@ -165,6 +168,9 @@ test-compactness: $(BUILD)/test_compactness
 test-zero-sk: $(BUILD)/test_zero_sk
 	@./$(BUILD)/test_zero_sk
 
+ml: $(BUILD)/ml_credit_scoring
+	@./$(BUILD)/ml_credit_scoring
+
 
 clean:
 	rm -rf $(BUILD) pvac_metrics.csv
@@ -173,4 +179,4 @@ help:
 	@echo "targets: all test test-v test-q test-hg debug sanitize examples clean"
 	@echo "env: PVAC_DBG=0|1|2"
 
-.PHONY: all test test-v test-q test-hg clean help
+.PHONY: all test test-v test-q test-hg clean help examples ml

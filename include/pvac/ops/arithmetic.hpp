@@ -14,6 +14,15 @@ namespace pvac {
 
 namespace detail {
 
+inline constexpr Fp fp_zero() { return Fp{0, 0}; }
+
+inline Fp fp_from_i64(int64_t x) {
+    return x >= 0 ? fp_from_u64(static_cast<uint64_t>(x))
+                  : fp_neg(fp_from_u64(static_cast<uint64_t>(-(x + 1)) + 1));
+}
+
+inline bool fp_is_zero(const Fp& x) { return (x.lo | x.hi) == 0; }
+
 template<typename F>
 inline auto fold_edges(const Cipher& ct, const PubKey& pk, F&& acc_fn) {
     std::vector<Fp> out(ct.L.size(), Fp{0, 0});
@@ -81,11 +90,24 @@ inline Layer make_prod_layer(const PubKey& pk, uint32_t pa, uint32_t pb) {
             pa < pb ? pa : pb, pa < pb ? pb : pa};
 }
 
+inline void append_scaled_edges(std::vector<Edge>& dest, const std::vector<Edge>& src, 
+                                const Fp& scale, uint32_t layer_offset = 0) {
+    if (fp_is_zero(scale)) return;
+    dest.reserve(dest.size() + src.size());
+    std::transform(src.begin(), src.end(), std::back_inserter(dest),
+        [&](Edge e) {
+            e.layer_id += layer_offset;
+            e.w = fp_mul(e.w, scale);
+            return e;
+        });
+}
+
 template<typename LayerGen, typename TargetGen>
 inline Cipher build_product_cipher(const PubKey& pk, const Cipher& A, const Cipher* B,
                                    LayerGen&& layer_gen, TargetGen&& target_gen, 
                                    size_t num_prods, size_t S, const char* tag) {
     Cipher C;
+    C.c0 = fp_zero();
     auto gA = fold_edges(A, pk, gsum_accumulator);
     auto gB = B ? fold_edges(*B, pk, gsum_accumulator) : gA;
     
@@ -121,11 +143,12 @@ inline Cipher build_product_cipher(const PubKey& pk, const Cipher& A, const Ciph
     return C;
 }
 
-} // namespace detail
+}
 
 inline Cipher ct_scale(const PubKey&, const Cipher& A, const Fp& s) {
     Cipher C = A;
     std::for_each(C.E.begin(), C.E.end(), [&s](Edge& e) { e.w = fp_mul(e.w, s); });
+    C.c0 = fp_mul(C.c0, s);
     return C;
 }
 
@@ -135,6 +158,7 @@ inline Cipher ct_neg(const PubKey& pk, const Cipher& A) {
 
 inline Cipher ct_add(const PubKey& pk, const Cipher& A, const Cipher& B) {
     Cipher C;
+    C.c0 = fp_add(A.c0, B.c0);
     C.L.reserve(A.L.size() + B.L.size());
     C.E.reserve(A.E.size() + B.E.size());
     
@@ -161,10 +185,19 @@ inline Cipher ct_sub(const PubKey& pk, const Cipher& A, const Cipher& B) {
 }
 
 inline Cipher ct_mul(const PubKey& pk, const Cipher& A, const Cipher& B, size_t S = 8) {
-    uint32_t LA = static_cast<uint32_t>(A.L.size());
-    uint32_t LB = static_cast<uint32_t>(B.L.size());
+    const Fp a0 = A.c0;
+    const Fp b0 = B.c0;
     
-    return detail::build_product_cipher(pk, A, &B,
+    Cipher A_g = A;
+    Cipher B_g = B;
+    A_g.c0 = detail::fp_zero();
+    B_g.c0 = detail::fp_zero();
+    
+    uint32_t LA = static_cast<uint32_t>(A_g.L.size());
+    uint32_t LB = static_cast<uint32_t>(B_g.L.size());
+    uint32_t off = LA;
+    
+    Cipher C = detail::build_product_cipher(pk, A_g, &B_g,
         [LA, LB](auto&& emit) {
             for (uint32_t la = 0; la < LA; ++la)
                 for (uint32_t lb = 0; lb < LB; ++lb)
@@ -174,13 +207,26 @@ inline Cipher ct_mul(const PubKey& pk, const Cipher& A, const Cipher& B, size_t 
             return fp_mul(gA[la], gB[lb]);
         },
         static_cast<size_t>(LA) * LB, S ? S : 1, "mul");
+    
+    detail::append_scaled_edges(C.E, B_g.E, a0, off);
+    detail::append_scaled_edges(C.E, A_g.E, b0, 0);
+    C.c0 = fp_mul(a0, b0);
+    
+    guard_budget(pk, C, "mul");
+    compact_layers(C);
+    return C;
 }
 
 inline Cipher ct_square(const PubKey& pk, const Cipher& A, size_t S = 8) {
-    uint32_t LA = static_cast<uint32_t>(A.L.size());
+    const Fp a0 = A.c0;
+    
+    Cipher A_g = A;
+    A_g.c0 = detail::fp_zero();
+    
+    uint32_t LA = static_cast<uint32_t>(A_g.L.size());
     size_t triangular = static_cast<size_t>(LA) * (LA + 1) / 2;
     
-    return detail::build_product_cipher(pk, A, nullptr,
+    Cipher C = detail::build_product_cipher(pk, A_g, nullptr,
         [LA](auto&& emit) {
             for (uint32_t la = 0; la < LA; ++la)
                 for (uint32_t lb = la; lb < LA; ++lb)
@@ -191,10 +237,46 @@ inline Cipher ct_square(const PubKey& pk, const Cipher& A, size_t S = 8) {
             return la != lb ? fp_add(prod, prod) : prod;
         },
         triangular, S ? S : 1, "square");
+    
+    Fp two_a0 = fp_add(a0, a0);
+    detail::append_scaled_edges(C.E, A_g.E, two_a0, 0);
+    C.c0 = fp_mul(a0, a0);
+    
+    guard_budget(pk, C, "square");
+    compact_layers(C);
+    return C;
 }
 
 inline Cipher ct_div_const(const PubKey& pk, const Cipher& A, const Fp& k) {
     return ct_scale(pk, A, fp_inv(k));
 }
 
-} // namespace pvac
+inline Cipher ct_mul_const(const PubKey& pk, const Cipher& A, uint64_t k) {
+    return ct_scale(pk, A, fp_from_u64(k));
+}
+
+inline Cipher ct_mul_const(const PubKey& pk, const Cipher& A, int64_t k) {
+    return ct_scale(pk, A, detail::fp_from_i64(k));
+}
+
+inline Cipher ct_add_const(const PubKey&, const Cipher& A, uint64_t k) {
+    Cipher C = A;
+    C.c0 = fp_add(C.c0, fp_from_u64(k));
+    return C;
+}
+
+inline Cipher ct_add_const(const PubKey&, const Cipher& A, int64_t k) {
+    Cipher C = A;
+    C.c0 = fp_add(C.c0, detail::fp_from_i64(k));
+    return C;
+}
+
+inline Cipher ct_sub_const(const PubKey& pk, const Cipher& A, uint64_t k) {
+    return ct_add_const(pk, A, -static_cast<int64_t>(k));
+}
+
+inline Cipher ct_sub_const(const PubKey& pk, const Cipher& A, int64_t k) {
+    return ct_add_const(pk, A, -k);
+}
+
+}

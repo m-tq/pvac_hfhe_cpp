@@ -72,7 +72,8 @@ inline Fp dec_value(const PubKey & pk, const SecKey & sk, const Cipher & C) {
         Rinv[lid] = fp_inv(R);
     }
 
-    Fp acc = fp_from_u64(0);
+    // start from the plaintext constant term (see Cipher::c0)
+    Fp acc = C.c0;
 
     for (const auto & e : C.E) {
         Fp term = fp_mul(e.w, pk.powg_B[e.idx]);
@@ -87,6 +88,4 @@ inline Fp dec_value(const PubKey & pk, const SecKey & sk, const Cipher & C) {
 
     return acc;
 }
-
-
 }

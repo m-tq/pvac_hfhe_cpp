@@ -17,7 +17,6 @@
 
 namespace pvac {
 
-
 namespace alg {
 
 template<typename T>
@@ -116,7 +115,6 @@ inline auto gen(size_t n, G&& g) -> Carrier<std::invoke_result_t<G, size_t>> {
 
 }
 
-
 namespace field {
 
 struct Op {
@@ -141,7 +139,6 @@ struct Op {
 };
 
 }
-
 
 namespace entropy {
 
@@ -168,7 +165,6 @@ struct Budget {
 };
 
 }
-
 
 namespace idx {
 
@@ -211,7 +207,6 @@ public:
 
 }
 
-
 namespace delta {
 
 struct Gen {
@@ -253,7 +248,6 @@ struct Set {
 };
 
 }
-
 
 namespace graph {
 
@@ -378,7 +372,6 @@ inline alg::Carrier<Edge> realize(const Emitter& em, Fp R, const N3& n) {
 
 }
 
-
 namespace reduction {
 
 inline alg::Carrier<Edge> merge(alg::Carrier<Edge> edges, const PubKey& pk) {
@@ -459,7 +452,6 @@ inline alg::Carrier<Edge> permute(alg::Carrier<Edge> e) {
 
 }
 
-
 namespace core {
 
 inline Cipher synth(const PubKey& pk, const SecKey& sk, Fp v, int depth) {
@@ -532,13 +524,13 @@ inline Cipher fuse(const PubKey& pk, const Cipher& a, const Cipher& b) {
     }
     
     Cipher C;
+    C.c0 = fp_add(a.c0, b.c0);
     C.L = std::move(ls);
     C.E = std::move(es);
     return C;
 }
 
 }
-
 
 inline std::pair<int, int> plan_noise(const PubKey& pk, int depth_hint) {
     entropy::Budget b = entropy::Budget::compute(pk.prm, depth_hint);
