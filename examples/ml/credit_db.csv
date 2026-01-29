@@ -1,0 +1,11 @@
+name,age,income_k,debt_k,savings_k,history_score,employment_years,defaults,open_accounts
+shimon_gershenson,52,280,45,120,92,24,0,3
+rivka_avital,34,95,30,45,78,8,0,5
+moshe_goldfarb,45,180,85,60,65,18,1,7
+leah_bernstein,28,65,15,25,70,4,0,2
+david_rosenfeld,61,320,20,280,98,35,0,4
+sarah_katz,39,110,95,30,55,12,2,8
+yakov_friedman,33,75,25,40,72,6,0,3
+rachel_steinberg,47,150,40,90,85,20,0,5
+eli_rabinowitz,29,55,60,10,45,3,1,6
+miriam_levinson,56,210,30,150,90,28,0,4
