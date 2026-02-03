@@ -7,9 +7,9 @@ your goal is to break the ciphertext `seed.ct` which contains string data in the
 
 you can use any available tools to decrypt this ciphertext, try to extract the parameter R from the equation and try to recover its contents
 
-once you recover the seed phrase, you will gain access to the wallet (which currently holds **30k OCT**): [oct7rAAiRhdRvKChDQrTJEAUqM9M9sfTBGQsacqME18xe1V](https://octrascan.io/addresses/oct7rAAiRhdRvKChDQrTJEAUqM9M9sfTBGQsacqME18xe1V)
+once you recover the seed phrase, you will gain access to the wallet (which currently holds **60k OCT**): [oct7rAAiRhdRvKChDQrTJEAUqM9M9sfTBGQsacqME18xe1V](https://octrascan.io/addresses/oct7rAAiRhdRvKChDQrTJEAUqM9M9sfTBGQsacqME18xe1V)
 
-then, by sending a transaction with any amount and a message (which you can also recover from the ciphertext, along with your eth address) to this address: `octHLvpfkP3NKSZ3tfAMYV1jzbGR7KtnVReish6sSXdGfst`, you will receive access to the ethereum address holding **4444.4444 USDT** in response: [0xa0b038b20b4633ffF5cDE2bDEfB63d6E1FD8C2e2](https://etherscan.io/address/0xa0b038b20b4633ffF5cDE2bDEfB63d6E1FD8C2e2)
+then, by sending a transaction with any amount and a message (which you can also recover from the ciphertext, along with your eth address) to this address: `octHLvpfkP3NKSZ3tfAMYV1jzbGR7KtnVReish6sSXdGfst`, you will receive access to the ethereum address holding **15k USD** in response: [0xa0b038b20b4633ffF5cDE2bDEfB63d6E1FD8C2e2](https://etherscan.io/address/0xa0b038b20b4633ffF5cDE2bDEfB63d6E1FD8C2e2)
 
 **you should also create an issue ticket for this repository and tell us how you managed to find the information in the seed file**
 
