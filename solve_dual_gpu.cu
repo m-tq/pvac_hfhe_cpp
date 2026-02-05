@@ -73,7 +73,7 @@
 constexpr int LPN_N = 4096;
 constexpr int LPN_T = 16384;
 constexpr int WORDS = (LPN_N + 63) / 64;
-constexpr int PREFIX_BITS = 20; // Reduced from 24 to 20 to increase collisions
+constexpr int PREFIX_BITS = 16; // Reduced to 16 bits. Table size 64K. High collision rate.
 constexpr int TABLE_SIZE = (1 << PREFIX_BITS);
 
 // Host Headers
