@@ -75,7 +75,7 @@
 constexpr int LPN_N = 4096;
 constexpr int LPN_T = 16384;
 constexpr int WORDS = (LPN_N + 63) / 64;
-constexpr int PREFIX_BITS = 16; // Reduced to 16 bits. Table size 64K. High collision rate.
+constexpr int PREFIX_BITS = 18; // Increase to 18 (262k entries) for better balance
 constexpr int TABLE_SIZE = (1 << PREFIX_BITS);
 
 // Host Headers
@@ -284,10 +284,10 @@ int main() {
     std::vector<int> p(LPN_N);
     std::iota(p.begin(), p.end(), 0);
     
-    int max_perms = 1000; // Increase to 1000 iterations
+    int max_perms = 5000; // Increase to 5000
     
     for (int iter = 0; iter < max_perms; ++iter) {
-        if (iter % 10 == 0) std::cout << "Iteration " << iter << "...\n";
+        if (iter % 100 == 0) std::cout << "Iteration " << iter << "...\n";
         std::shuffle(p.begin(), p.end(), rng);
         
         // Permute samples on host
