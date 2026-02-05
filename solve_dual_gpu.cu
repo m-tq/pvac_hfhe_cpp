@@ -281,6 +281,79 @@ int main() {
     cudaMemset(d_table, -1, TABLE_SIZE * sizeof(int));
     
     // 1. Build Table
+    // Add Permutation loop
+    // We try random permutations of columns to change the prefix.
+    // If we only check the first 16 bits, we might miss collisions that happen elsewhere.
+    
+    std::mt19937 rng(12345);
+    std::vector<int> p(LPN_N);
+    std::iota(p.begin(), p.end(), 0);
+    
+    int max_perms = 20; // Try 20 random permutations
+    
+    for (int iter = 0; iter < max_perms; ++iter) {
+        std::cout << "Iteration " << iter << "...\n";
+        std::shuffle(p.begin(), p.end(), rng);
+        
+        // Permute samples on host
+        // Optimization: Just permute the first 16 bits? No, we need full weight check.
+        // Better: Permute on GPU? Or just rebuild h_samples on host.
+        // Rebuilding on host is safer for now.
+        
+        std::vector<uint64_t> permuted_samples(t * words, 0);
+        for (int i = 0; i < t; ++i) {
+            for (int bit = 0; bit < LPN_N; ++bit) {
+                // Get bit p[bit] from original
+                int orig_bit = p[bit];
+                int orig_word = orig_bit / 64;
+                int orig_offset = orig_bit % 64;
+                
+                if ((h_samples[i * words + orig_word] >> orig_offset) & 1) {
+                    permuted_samples[i * words + (bit / 64)] |= (1ULL << (bit % 64));
+                }
+            }
+        }
+        
+        cudaMemcpy(d_samples, permuted_samples.data(), permuted_samples.size() * sizeof(uint64_t), cudaMemcpyHostToDevice);
+        
+        // Reset
+        cudaMemset(d_table, -1, TABLE_SIZE * sizeof(int));
+        cudaMemset(d_found, 0, sizeof(int));
+        
+        int threads = 256;
+        int blocks = (t + threads - 1) / threads;
+        build_table_kernel<<<blocks, threads>>>(d_samples, d_table, t, words);
+        cudaDeviceSynchronize();
+        
+        long long total_pairs = (long long)t * t;
+        int grid_size = (total_pairs + threads - 1) / threads;
+        search_kernel<<<grid_size, threads>>>(d_samples, d_table, d_res, t, words, d_found);
+        cudaDeviceSynchronize();
+        
+        int found_count = 0;
+        cudaMemcpy(&found_count, d_found, sizeof(int), cudaMemcpyDeviceToHost);
+        
+        if (found_count > 0) {
+            std::cout << "FOUND " << found_count << " CANDIDATES!\n";
+            // Print and break
+            int count = std::min(found_count, 100);
+            std::vector<Result> results(count);
+            cudaMemcpy(results.data(), d_res, count * sizeof(Result), cudaMemcpyDeviceToHost);
+            
+            std::sort(results.begin(), results.end(), [](const Result& a, const Result& b) {
+                return a.w < b.w;
+            });
+
+            for (int i = 0; i < count; ++i) {
+                std::cout << "Candidate: " << results[i].i << " + " << results[i].j << " + " << results[i].k 
+                          << " -> Weight " << results[i].w << "\n";
+            }
+            break; 
+        }
+    }
+    
+    /*
+    // 1. Build Table
     int threads = 256;
     int blocks = (t + threads - 1) / threads;
     build_table_kernel<<<blocks, threads>>>(d_samples, d_table, t, words);
@@ -321,6 +394,7 @@ int main() {
         std::cout << "No candidates found with current prefix size (" << PREFIX_BITS << ").\n";
         std::cout << "Try reducing prefix bits or checking Weight-4.\n";
     }
+    */
     
     cudaFree(d_samples);
     cudaFree(d_table);
