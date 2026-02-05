@@ -3,6 +3,8 @@
 #include <fstream>
 #include <cstdint>
 #include <algorithm>
+#include <random>
+#include <numeric>
 #include <cuda_runtime.h>
 #include <map>
 #include <omp.h>
