@@ -217,14 +217,18 @@ __global__ void search_kernel(const uint64_t* d_samples, const int* d_table, Res
             w += __popcll(val);
         }
         
-        // Threshold check.
-        // We want very sparse. e.g. < 40.
-        // If random, weight is 2048.
-        if (w < 1000) { // High threshold for debug, lower later
-            int pos = atomicAdd(found_count, 1);
-            if (pos < 10) {
-                d_res[pos] = {i, j, k, w};
-            }
+    // Threshold check.
+    // We want very sparse. e.g. < 40.
+    // If random, weight is 2048.
+    // The previous run found 100M+ candidates with weight ~270.
+    // This is NOT sparse enough. It means our prefix collision (24 bits) is too weak.
+    // We need strict filtering.
+    // Let's only keep candidates with weight < 60 (or even 40).
+    
+    if (w < 60) { 
+        int pos = atomicAdd(found_count, 1);
+        if (pos < 100) { // Store more results
+            d_res[pos] = {i, j, k, w};
         }
     }
 }
@@ -266,7 +270,7 @@ int main() {
     
     cudaMalloc(&d_samples, h_samples.size() * sizeof(uint64_t));
     cudaMalloc(&d_table, TABLE_SIZE * sizeof(int));
-    cudaMalloc(&d_res, 10 * sizeof(Result));
+    cudaMalloc(&d_res, 100 * sizeof(Result));
     cudaMalloc(&d_found, sizeof(int));
     
     // Copy samples
@@ -296,13 +300,18 @@ int main() {
     int found_count = 0;
     cudaMemcpy(&found_count, d_found, sizeof(int), cudaMemcpyDeviceToHost);
     
-    std::cout << "Search complete. Found " << found_count << " candidates.\n";
+    std::cout << "Search complete. Found " << found_count << " candidates with weight < 60.\n";
     
     if (found_count > 0) {
-        int count = std::min(found_count, 10);
+        int count = std::min(found_count, 100);
         std::vector<Result> results(count);
         cudaMemcpy(results.data(), d_res, count * sizeof(Result), cudaMemcpyDeviceToHost);
         
+        // Sort by weight
+        std::sort(results.begin(), results.end(), [](const Result& a, const Result& b) {
+            return a.w < b.w;
+        });
+
         for (int i = 0; i < count; ++i) {
             std::cout << "Candidate: " << results[i].i << " + " << results[i].j << " + " << results[i].k 
                       << " -> Weight " << results[i].w << "\n";
