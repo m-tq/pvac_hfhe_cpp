@@ -231,7 +231,8 @@ __global__ void search_kernel(const uint64_t* d_samples, const int* d_table, Res
             d_res[pos] = {i, j, k, w};
         }
     }
-}
+    } // End if potential candidate
+} // End kernel
 
 int main() {
     std::cout << "Starting GPU Dual Attack (Weight-3 Search)...\n";
