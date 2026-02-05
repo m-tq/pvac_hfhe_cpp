@@ -220,14 +220,7 @@ __global__ void search_kernel(const uint64_t* d_samples, const int* d_table, Res
         }
         
     // Threshold check.
-    // We want very sparse. e.g. < 40.
-    // If random, weight is 2048.
-    // The previous run found 100M+ candidates with weight ~270.
-    // This is NOT sparse enough. It means our prefix collision (24 bits) is too weak.
-    // We need strict filtering.
-    // Let's only keep candidates with weight < 60 (or even 40).
-    
-    if (w < 60) { 
+    if (w < 70) { // Relax threshold slightly from 60 to 70
         int pos = atomicAdd(found_count, 1);
         if (pos < 100) { // Store more results
             d_res[pos] = {i, j, k, w};
@@ -291,10 +284,10 @@ int main() {
     std::vector<int> p(LPN_N);
     std::iota(p.begin(), p.end(), 0);
     
-    int max_perms = 20; // Try 20 random permutations
+    int max_perms = 1000; // Increase to 1000 iterations
     
     for (int iter = 0; iter < max_perms; ++iter) {
-        std::cout << "Iteration " << iter << "...\n";
+        if (iter % 10 == 0) std::cout << "Iteration " << iter << "...\n";
         std::shuffle(p.begin(), p.end(), rng);
         
         // Permute samples on host
